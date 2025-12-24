@@ -25,6 +25,7 @@
             --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
             --font-main: 'Inter', sans-serif;
             --error-color: #ef4444;
+            --warning-color: #f59e0b;
         }
 
         * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: #3f3f46 transparent; }
@@ -75,6 +76,7 @@
         .action-btn { background: transparent; color: var(--text-secondary); border: none; width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; flex-shrink: 0; margin-bottom: 2px; }
         .action-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.1); }
         .action-btn.recording { color: var(--error-color); animation: pulse 1.5s infinite; background: rgba(239, 68, 68, 0.1); }
+        .action-btn.disabled { opacity: 0.3; cursor: not-allowed; pointer-events: none; }
         
         #sendBtn { background: var(--accent-color); color: white; }
         #sendBtn:disabled { background: transparent; color: #52525b; cursor: not-allowed; }
@@ -84,6 +86,7 @@
         .toast { visibility: hidden; min-width: 250px; background-color: #333; color: #fff; text-align: center; border-radius: 8px; padding: 12px; position: fixed; z-index: 100; left: 50%; bottom: 100px; transform: translateX(-50%); font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); border: 1px solid var(--border-color); opacity: 0; transition: opacity 0.3s, bottom 0.3s; }
         .toast.show { visibility: visible; opacity: 1; bottom: 110px; }
         .toast.error { border-color: var(--error-color); color: #ffadad; }
+        .toast.warning { border-color: var(--warning-color); color: #fde68a; }
 
         .footer-links { margin-top: 10px; font-size: 12px; color: #52525b; text-align: center; }
         .footer-links a { color: var(--text-secondary); text-decoration: none; margin: 0 8px; }
@@ -161,81 +164,141 @@
     };
 
     /* --- SISTEMA DE NOTIFICAÇÃO (TOAST) --- */
-    function showToast(message, isError = false) {
+    function showToast(message, type = "normal") {
         elements.toast.textContent = message;
-        elements.toast.className = isError ? "toast show error" : "toast show";
+        elements.toast.className = `toast show ${type}`;
         setTimeout(() => { elements.toast.className = elements.toast.className.replace("show", ""); }, 3500);
     }
 
-    /* --- LÓGICA DO MICROFONE CORRIGIDA --- */
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    /* --- VERIFICAÇÃO DE COMPATIBILIDADE DO MICROFONE --- */
+    function checkSpeechRecognitionSupport() {
+        // Verifica se o navegador suporta a API
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        
+        if (!SpeechRecognition) {
+            console.warn("API de voz não suportada neste navegador.");
+            elements.micBtn.classList.add('disabled');
+            elements.micBtn.title = "Microfone não suportado neste navegador";
+            return null;
+        }
+        
+        // Verifica se estamos em um arquivo local (file://)
+        if (window.location.protocol === 'file:') {
+            console.warn("Microfone não funciona em arquivos locais (file://).");
+            elements.micBtn.classList.add('disabled');
+            elements.micBtn.title = "Use um servidor local (localhost) para habilitar o microfone";
+            showToast("Microfone requer um servidor local. Use localhost ou hospede online.", "warning");
+            return null;
+        }
+        
+        // Verifica se estamos em HTTPS ou localhost (requisito do navegador)
+        if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+            console.warn("Microfone requer HTTPS ou localhost.");
+            elements.micBtn.classList.add('disabled');
+            elements.micBtn.title = "Microfone requer HTTPS ou localhost";
+            showToast("Microfone só funciona em HTTPS ou localhost.", "warning");
+            return null;
+        }
+        
+        return SpeechRecognition;
+    }
+
+    /* --- LÓGICA DO MICROFONE --- */
     let recognition = null;
     let isRecording = false;
-
+    
+    // Inicializa o reconhecimento de voz se suportado
+    const SpeechRecognition = checkSpeechRecognitionSupport();
+    
     if (SpeechRecognition) {
-        recognition = new SpeechRecognition();
-        recognition.lang = 'pt-BR';
-        recognition.continuous = false; // Para ao terminar de falar
-        recognition.interimResults = false;
+        try {
+            recognition = new SpeechRecognition();
+            recognition.lang = 'pt-BR';
+            recognition.continuous = false;
+            recognition.interimResults = false;
 
-        recognition.onstart = () => {
-            isRecording = true;
-            elements.micBtn.classList.add('recording');
-            elements.micIcon.className = "ri-mic-fill";
-            elements.input.placeholder = "Ouvindo... Fale agora.";
-        };
+            recognition.onstart = () => {
+                isRecording = true;
+                elements.micBtn.classList.add('recording');
+                elements.micIcon.className = "ri-mic-fill";
+                elements.input.placeholder = "Ouvindo... Fale agora.";
+                showToast("Ouvindo... Fale agora.", "normal");
+            };
 
-        recognition.onend = () => {
-            isRecording = false;
-            elements.micBtn.classList.remove('recording');
-            elements.micIcon.className = "ri-mic-line";
-            elements.input.placeholder = "Envie uma mensagem...";
-        };
+            recognition.onend = () => {
+                isRecording = false;
+                elements.micBtn.classList.remove('recording');
+                elements.micIcon.className = "ri-mic-line";
+                elements.input.placeholder = "Envie uma mensagem...";
+            };
 
-        recognition.onresult = (event) => {
-            const transcript = event.results[0][0].transcript;
-            const currentText = elements.input.value;
-            // Concatena sem apagar o anterior
-            elements.input.value = currentText + (currentText.length > 0 && !currentText.endsWith(' ') ? ' ' : '') + transcript;
-            elements.input.dispatchEvent(new Event('input')); // Atualiza altura e botão
-            elements.input.focus();
-        };
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                const currentText = elements.input.value;
+                // Concatena sem apagar o anterior
+                elements.input.value = currentText + (currentText.length > 0 && !currentText.endsWith(' ') ? ' ' : '') + transcript;
+                elements.input.dispatchEvent(new Event('input'));
+                elements.input.focus();
+                showToast("Fala reconhecida!", "normal");
+            };
 
-        recognition.onerror = (event) => {
-            isRecording = false;
-            elements.micBtn.classList.remove('recording');
-            elements.micIcon.className = "ri-mic-line";
-            
-            // Tratamento de Erros Amigável
-            let msg = "Erro no microfone.";
-            if (event.error === 'not-allowed') {
-                msg = "Permissão negada. Clique no cadeado na URL e permita o microfone.";
-            } else if (event.error === 'no-speech') {
-                msg = "Não ouvi nada. Tente novamente.";
-            } else if (event.error === 'network') {
-                msg = "Erro de conexão. Verifique sua internet.";
-            }
-            showToast(msg, true);
-        };
-    } else {
-        elements.micBtn.style.display = 'none'; // Esconde botão se navegador não suportar
-        console.warn("API de voz não suportada neste navegador.");
+            recognition.onerror = (event) => {
+                isRecording = false;
+                elements.micBtn.classList.remove('recording');
+                elements.micIcon.className = "ri-mic-line";
+                
+                // Tratamento de Erros Amigável
+                let msg = "Erro no microfone.";
+                if (event.error === 'not-allowed') {
+                    msg = "Permissão negada. Clique no cadeado na URL e permita o microfone.";
+                } else if (event.error === 'no-speech') {
+                    msg = "Não ouvi nada. Tente novamente.";
+                } else if (event.error === 'network') {
+                    msg = "Erro de conexão. Verifique sua internet.";
+                } else if (event.error === 'audio-capture') {
+                    msg = "Microfone não encontrado ou não acessível.";
+                } else if (event.error === 'not-allowed') {
+                    msg = "Permissão negada para usar o microfone.";
+                }
+                showToast(msg, "error");
+            };
+        } catch (error) {
+            console.error("Erro ao inicializar reconhecimento de voz:", error);
+            elements.micBtn.classList.add('disabled');
+            elements.micBtn.title = "Erro ao configurar microfone";
+            showToast("Erro ao configurar microfone.", "error");
+        }
     }
 
     function toggleRecording() {
-        if (!recognition) {
-            showToast("Seu navegador não suporta voz. Use o Chrome.", true);
+        // Se o botão está desabilitado, não faz nada
+        if (elements.micBtn.classList.contains('disabled')) {
+            showToast("Microfone não disponível. Veja as instruções.", "warning");
             return;
         }
         
-        // Verificação de Protocolo (Importante!)
-        if (window.location.protocol === 'file:') {
-            showToast("O microfone não funciona em arquivos locais. Use um servidor local.", true);
+        if (!recognition) {
+            showToast("Microfone não configurado.", "error");
             return;
         }
-
-        if (isRecording) recognition.stop();
-        else recognition.start();
+        
+        // Verifica permissões antes de iniciar
+        if (!isRecording) {
+            // Solicita permissão de microfone
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(() => {
+                    // Permissão concedida, inicia reconhecimento
+                    recognition.start();
+                })
+                .catch((err) => {
+                    console.error("Erro de permissão de microfone:", err);
+                    showToast("Permissão de microfone negada. Clique no ícone de cadeado na barra de URL.", "error");
+                    elements.micBtn.classList.add('disabled');
+                });
+        } else {
+            // Para a gravação
+            recognition.stop();
+        }
     }
 
     /* --- Inicialização --- */
@@ -249,6 +312,14 @@
         
         renderChatHistory();
         if(window.innerWidth > 768) elements.input.focus();
+        
+        // Adiciona instruções sobre o microfone se necessário
+        if (window.location.protocol === 'file:') {
+            console.log("Para usar o microfone:");
+            console.log("1. Instale uma extensão de servidor local no VSCode (Live Server)");
+            console.log("2. Ou execute: python -m http.server 8000");
+            console.log("3. Acesse: http://localhost:8000");
+        }
     }
 
     /* --- Chat Core --- */
@@ -369,7 +440,7 @@
             saveAllChats();
         } catch (e) {
             loading.remove();
-            showToast("Erro ao conectar com a IA.", true);
+            showToast("Erro ao conectar com a IA.", "error");
         } finally {
             elements.sendBtn.disabled = false;
             elements.input.focus();
